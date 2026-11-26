@@ -1,0 +1,76 @@
+
+
+
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+enum SyncStatus {
+  PENDING
+  SYNCED
+  FAILED
+}
+
+model ServicePackage {
+  id           String        @id @default(cuid())
+  slug         String        @unique
+  name         String
+  description  String
+  priceInCents Int
+  billingType  String        @default("ONE_TIME")
+  ghlTag       String
+  isPopular    Boolean       @default(false)
+  createdAt    DateTime      @default(now())
+  orders       ClientOrder[]
+}
+
+model ClientOrder {
+  id               String         @id @default(cuid())
+  clientName       String
+  clientEmail      String
+  clientPhone      String?
+  businessName     String?
+  businessGoal     String?
+  packageId        String
+  package          ServicePackage @relation(fields: [packageId], references: [id])
+  addOnNames       String[]       @default([])
+  amountInCents    Int
+  discountInCents  Int            @default(0)
+  currency         String         @default("usd")
+  paymentStatus    PaymentStatus  @default(PENDING)
+  stripeSessionId  String?        @unique
+  stripePaymentId  String?
+  aiOnboardingPlan String?
+  aiInternalSteps  String?
+  ghlSyncStatus    SyncStatus     @default(PENDING)
+  ghlContactId     String?
+  ghlErrorMessage  String?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  webhookLogs      WebhookLog[]
+}
+
+model WebhookLog {
+  id          String       @id @default(cuid())
+  source      String
+  eventType   String
+  status      String
+  payload     String?
+  errorDetail String?
+  orderId     String?
+  order       ClientOrder? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  createdAt   DateTime     @default(now())
+}
