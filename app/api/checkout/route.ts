@@ -7,6 +7,7 @@ import { ensureDefaultPackages } from "@/lib/seed-packages";
 
 interface CheckoutRequestBody {
   packageId: string;
+  packageName?: string;
   addOnNames?: string[];
   addOnTotalCents?: number;
   discountPercent?: number;
@@ -29,17 +30,32 @@ export async function POST(req: NextRequest) {
     }
 
     const packages = await ensureDefaultPackages();
+    const normalizedId = body.packageId.trim().toLowerCase();
+    const normalizedName = body.packageName?.trim().toLowerCase();
+
     const selectedPkg =
-      packages.find((p) => p.id === body.packageId) ||
-      packages.find((p) => p.slug === body.packageId);
+      packages.find((p) => p.id.toLowerCase() === normalizedId) ||
+      packages.find((p) => p.slug?.toLowerCase() === normalizedId) ||
+      (normalizedName
+        ? packages.find((p) => p.name.toLowerCase() === normalizedName)
+        : undefined) ||
+      packages.find((p) =>
+        p.name.toLowerCase().includes(normalizedId.replace(/^pkg-/, ""))
+      );
 
     if (!selectedPkg) {
-      return NextResponse.json({ error: "Service package not found." }, { status: 404 });
+      return NextResponse.json(
+        { error: "Service package not found." },
+        { status: 404 }
+      );
     }
 
     const addOns = Array.isArray(body.addOnNames) ? body.addOnNames : [];
     const addOnCents = Math.max(0, Number(body.addOnTotalCents || 0));
-    const discountPct = Math.min(50, Math.max(0, Number(body.discountPercent || 0)));
+    const discountPct = Math.min(
+      50,
+      Math.max(0, Number(body.discountPercent || 0))
+    );
 
     const subtotalCents = selectedPkg.priceInCents + addOnCents;
     const discountCents = Math.round((subtotalCents * discountPct) / 100);
@@ -73,7 +89,10 @@ export async function POST(req: NextRequest) {
     }
 
     const session = await stripe.checkout.sessions.create({
-      mode: selectedPkg.billingType === "SUBSCRIPTION" ? "subscription" : "payment",
+      mode:
+        selectedPkg.billingType === "SUBSCRIPTION"
+          ? "subscription"
+          : "payment",
       customer_email: order.clientEmail,
       line_items: [
         {
@@ -112,8 +131,8 @@ export async function POST(req: NextRequest) {
       mode: "stripe",
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to initiate checkout";
+    const message =
+      error instanceof Error ? error.message : "Failed to initiate checkout";
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
-

@@ -1,4 +1,6 @@
 
+
+
 "use client";
 
 import { useEffect, useState } from "react";
@@ -194,21 +196,31 @@ export default function CheckoutPage() {
       return;
     }
 
+    const packageIdentifier = selectedPackage?.slug || selectedPackage?.id;
+    if (!packageIdentifier) {
+      setErrorMessage("Please select a service package.");
+      return;
+    }
+
+    const selectedAddonObjects = addons.filter((a) =>
+      selectedAddonIds.includes(a.id)
+    );
+
     setSubmitting(true);
     try {
       const res = await fetch("/api/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          packageId: selectedPackage?.id,
-          packageName: selectedPackage?.name,
-          addonIds: selectedAddonIds,
-          promoCode: appliedPromo,
-          fullName: fullName.trim(),
-          email: email.trim(),
-          phone: phone.trim(),
+          packageId: packageIdentifier,
+          addOnNames: selectedAddonObjects.map((a) => a.name),
+          addOnTotalCents: Math.round(addonsTotal * 100),
+          discountPercent: appliedPromo === "CLIENT10" ? 10 : 0,
+          clientName: fullName.trim(),
+          clientEmail: email.trim(),
+          clientPhone: phone.trim(),
           businessName: businessName.trim(),
-          goal: goal.trim(),
+          businessGoal: goal.trim(),
         }),
       });
 
@@ -220,12 +232,16 @@ export default function CheckoutPage() {
         return;
       }
 
-      if (data?.url) {
-        window.location.href = data.url;
+      const redirectUrl = data?.checkoutUrl || data?.url;
+
+      if (redirectUrl) {
+        window.location.href = redirectUrl;
         return;
       }
 
-      setErrorMessage("Checkout session created, but no redirect URL was returned.");
+      setErrorMessage(
+        "Checkout session created, but no redirect URL was returned."
+      );
     } catch {
       setErrorMessage("Network error while creating checkout session.");
     } finally {
@@ -408,7 +424,7 @@ export default function CheckoutPage() {
                     htmlFor="full-name"
                     className="block text-xs font-medium text-neutral-300"
                   >
-                    Full Name 
+                    Full Name
                   </label>
                   <input
                     id="full-name"
@@ -426,7 +442,7 @@ export default function CheckoutPage() {
                     htmlFor="work-email"
                     className="block text-xs font-medium text-neutral-300"
                   >
-                    Work Email 
+                    Work Email
                   </label>
                   <input
                     id="work-email"
@@ -549,4 +565,3 @@ export default function CheckoutPage() {
     </div>
   );
 }
-
