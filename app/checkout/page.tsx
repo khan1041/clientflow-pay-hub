@@ -11,7 +11,8 @@ interface PackageItem {
   name: string;
   slug?: string;
   description?: string | null;
-  price: number | string;
+  price?: number | string;
+  priceInCents?: number;
   billingType?: string | null;
   interval?: string | null;
 }
@@ -25,42 +26,31 @@ interface AddonItem {
 
 const FALLBACK_PACKAGES: PackageItem[] = [
   {
-    id: "pkg-retainer",
+    id: "monthly-automation-retainer",
+    slug: "monthly-automation-retainer",
     name: "Monthly AI & CRM Optimization Retainer",
     description:
       "Ongoing workflow monitoring, prompt tuning, webhook reliability checks, and priority CRM support.",
     price: 399,
-    billingType: "monthly",
+    billingType: "SUBSCRIPTION",
   },
   {
-    id: "pkg-starter",
-    name: "Starter Automation",
-    description: "Automated lead capture and follow-up setup.",
-    price: 499,
-    billingType: "one-time",
-  },
-  {
-    id: "pkg-crm-starter",
+    id: "ai-lead-engine-starter",
+    slug: "ai-lead-engine-starter",
     name: "AI Lead Capture & CRM Starter",
     description:
-      "Lead intake, qualification, and GoHighLevel pipeline routing.",
+      "Automated lead intake, instant AI qualification, and GoHighLevel pipeline routing for growing teams.",
     price: 499,
-    billingType: "one-time",
+    billingType: "ONE_TIME",
   },
   {
-    id: "pkg-growth",
-    name: "Growth Pipeline",
-    description: "Booking automation, CRM sync, and alerts.",
-    price: 999,
-    billingType: "one-time",
-  },
-  {
-    id: "pkg-system",
+    id: "clientflow-growth-system",
+    slug: "clientflow-growth-system",
     name: "ClientFlow Growth & Onboarding System",
     description:
-      "Payment-to-onboarding automation with Stripe webhooks, onboarding plans, and GHL triggers.",
+      "Full payment-to-onboarding automation with Stripe webhooks, AI roadmap generation, and GHL workflow triggers.",
     price: 999,
-    billingType: "one-time",
+    billingType: "ONE_TIME",
   },
 ];
 
@@ -82,6 +72,21 @@ const FALLBACK_ADDONS: AddonItem[] = [
   },
 ];
 
+function getPackagePrice(pkg?: PackageItem): number {
+  if (!pkg) return 0;
+  if (typeof pkg.priceInCents === "number" && Number.isFinite(pkg.priceInCents)) {
+    return pkg.priceInCents / 100;
+  }
+  if (typeof pkg.price === "number") {
+    return Number.isFinite(pkg.price) ? pkg.price : 0;
+  }
+  if (typeof pkg.price === "string") {
+    const parsed = parseFloat(pkg.price);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+}
+
 function toNumber(val: number | string | undefined | null): number {
   if (typeof val === "number") return Number.isFinite(val) ? val : 0;
   if (typeof val === "string") {
@@ -93,7 +98,7 @@ function toNumber(val: number | string | undefined | null): number {
 
 export default function CheckoutPage() {
   const [packages, setPackages] = useState<PackageItem[]>(FALLBACK_PACKAGES);
-  const [addons, setAddons] = useState<AddonItem[]>(FALLBACK_ADDONS);
+  const [addons] = useState<AddonItem[]>(FALLBACK_ADDONS);
   const [selectedPackageId, setSelectedPackageId] = useState<string>(
     FALLBACK_PACKAGES[0].id
   );
@@ -114,32 +119,27 @@ export default function CheckoutPage() {
   useEffect(() => {
     let active = true;
 
-    async function loadCatalog() {
+    async function loadPackages() {
       try {
-        const res = await fetch("/api/checkout/catalog");
+        const res = await fetch("/api/packages");
         if (!res.ok) return;
         const data = await res.json();
+        const list = Array.isArray(data) ? data : data?.packages;
 
-        if (!active) return;
+        if (!active || !Array.isArray(list) || list.length === 0) return;
 
-        if (Array.isArray(data.packages) && data.packages.length > 0) {
-          setPackages(data.packages);
-          setSelectedPackageId((prev) =>
-            data.packages.some((p: PackageItem) => p.id === prev)
-              ? prev
-              : data.packages[0].id
-          );
-        }
-
-        if (Array.isArray(data.addons) && data.addons.length > 0) {
-          setAddons(data.addons);
-        }
+        setPackages(list);
+        setSelectedPackageId((prev) =>
+          list.some((p: PackageItem) => p.id === prev || p.slug === prev)
+            ? prev
+            : list[0].id
+        );
       } catch {
-        // Keep fallback items if catalog endpoint is not present
+        // Keep fallback packages if API fails
       }
     }
 
-    loadCatalog();
+    loadPackages();
 
     return () => {
       active = false;
@@ -172,9 +172,11 @@ export default function CheckoutPage() {
   }
 
   const selectedPackage =
-    packages.find((p) => p.id === selectedPackageId) || packages[0];
+    packages.find(
+      (p) => p.id === selectedPackageId || p.slug === selectedPackageId
+    ) || packages[0];
 
-  const packagePrice = toNumber(selectedPackage?.price);
+  const packagePrice = getPackagePrice(selectedPackage);
   const addonsTotal = addons
     .filter((a) => selectedAddonIds.includes(a.id))
     .reduce((sum, a) => sum + toNumber(a.price), 0);
@@ -184,6 +186,7 @@ export default function CheckoutPage() {
   const totalDue = Math.max(0, subtotal - discountAmount);
 
   const isMonthly =
+    selectedPackage?.billingType?.toUpperCase() === "SUBSCRIPTION" ||
     selectedPackage?.billingType?.toLowerCase() === "monthly" ||
     selectedPackage?.interval?.toLowerCase() === "month";
 
@@ -213,6 +216,7 @@ export default function CheckoutPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           packageId: packageIdentifier,
+          packageName: selectedPackage.name,
           addOnNames: selectedAddonObjects.map((a) => a.name),
           addOnTotalCents: Math.round(addonsTotal * 100),
           discountPercent: appliedPromo === "CLIENT10" ? 10 : 0,
@@ -297,8 +301,9 @@ export default function CheckoutPage() {
               <div className="space-y-2.5">
                 {packages.map((pkg) => {
                   const active = pkg.id === selectedPackage?.id;
-                  const price = toNumber(pkg.price);
+                  const price = getPackagePrice(pkg);
                   const monthly =
+                    pkg.billingType?.toUpperCase() === "SUBSCRIPTION" ||
                     pkg.billingType?.toLowerCase() === "monthly" ||
                     pkg.interval?.toLowerCase() === "month";
 
