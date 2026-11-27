@@ -19,7 +19,13 @@ interface OrderRecord {
     name?: string | null;
     slug?: string | null;
     ghlTag?: string | null;
+    priceInCents?: number | null;
+    price?: number | string | null;
   } | null;
+  amountInCents?: number | string | null;
+  totalCents?: number | string | null;
+  amountPaidCents?: number | string | null;
+  priceInCents?: number | string | null;
   amount?: number | string | null;
   totalAmount?: number | string | null;
   price?: number | string | null;
@@ -59,10 +65,46 @@ function getPackageTitle(order: OrderRecord): string {
   return order.package?.name || order.packageName || "Standard Package";
 }
 
+function toNumeric(val: unknown): number | null {
+  if (typeof val === "number" && Number.isFinite(val)) return val;
+  if (typeof val === "string" && val.trim() !== "") {
+    const parsed = parseFloat(val);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
 function getOrderAmount(order: OrderRecord): number {
-  const raw = order.amount ?? order.totalAmount ?? order.price ?? 0;
-  const num = typeof raw === "string" ? parseFloat(raw) : Number(raw);
-  return Number.isFinite(num) ? num : 0;
+  const centsRaw =
+    toNumeric(order.amountInCents) ??
+    toNumeric(order.totalCents) ??
+    toNumeric(order.amountPaidCents) ??
+    toNumeric(order.priceInCents);
+
+  if (centsRaw !== null) {
+    return centsRaw / 100;
+  }
+
+  const dollarRaw =
+    toNumeric(order.amount) ??
+    toNumeric(order.totalAmount) ??
+    toNumeric(order.price);
+
+  if (dollarRaw !== null) {
+    return dollarRaw;
+  }
+
+  const pkgCents = toNumeric(order.package?.priceInCents);
+  if (pkgCents !== null) {
+    return pkgCents / 100;
+  }
+
+  const pkgDollar = toNumeric(order.package?.price);
+  if (pkgDollar !== null) {
+    return pkgDollar;
+  }
+
+  return 0;
 }
 
 function getPaymentStatus(order: OrderRecord): string {
