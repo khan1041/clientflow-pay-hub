@@ -1,11 +1,45 @@
 
 
-
 import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
 import { prisma } from "@/lib/prisma";
 import { stripe } from "@/lib/stripe";
 import { generateOnboardingPlan } from "@/lib/openai-onboarding";
+
+function toCleanString(value: unknown, fallback = ""): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    return value
+      .map((item) =>
+        typeof item === "string" ? item : item ? JSON.stringify(item) : ""
+      )
+      .filter(Boolean)
+      .join("\n");
+  }
+  if (value == null) return fallback;
+  return String(value);
+}
+
+function toStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item)).filter(Boolean);
+  }
+  if (typeof value === "string" && value.trim()) {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) {
+        return parsed.map((item) => String(item)).filter(Boolean);
+      }
+    } catch {
+      // If not JSON, split by comma
+    }
+    return value
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
 
 async function triggerN8nOnboarding(payload: {
   orderId: string;
@@ -132,15 +166,19 @@ export async function POST(req: NextRequest) {
 
     const amountFormatted = (existingOrder.amountInCents / 100).toFixed(2);
     const amountUsd = `$${amountFormatted}`;
+    const addOnNamesArray = toStringArray(existingOrder.addOnNames);
 
     const aiPlan = await generateOnboardingPlan({
       clientName: existingOrder.clientName,
       businessName: existingOrder.businessName,
       businessGoal: existingOrder.businessGoal,
       packageName: existingOrder.package.name,
-      addOnNames: existingOrder.addOnNames,
+      addOnNames: addOnNamesArray,
       amountFormatted: amountUsd,
     });
+
+    const baseClientPlan = toCleanString(aiPlan.clientPlan, "");
+    const internalStepsStr = toCleanString(aiPlan.internalSteps, "");
 
     const n8nResult = await triggerN8nOnboarding({
       orderId: existingOrder.id,
@@ -150,14 +188,17 @@ export async function POST(req: NextRequest) {
       businessName: existingOrder.businessName,
       businessGoal: existingOrder.businessGoal,
       packageName: existingOrder.package.name,
-      addOnNames: existingOrder.addOnNames,
+      addOnNames: addOnNamesArray.length > 0 ? addOnNamesArray.join(", ") : null,
       amount: amountFormatted,
       amountInCents: existingOrder.amountInCents,
       notes: existingOrder.businessGoal,
-      aiOnboardingPlan: aiPlan.clientPlan,
+      aiOnboardingPlan: baseClientPlan,
     });
 
-    const finalOnboardingPlan = n8nResult.onboardingPlan || aiPlan.clientPlan;
+    const finalOnboardingPlan = toCleanString(
+      n8nResult.onboardingPlan || baseClientPlan,
+      ""
+    );
 
     await prisma.clientOrder.update({
       where: { id: existingOrder.id },
@@ -169,7 +210,7 @@ export async function POST(req: NextRequest) {
             ? session.payment_intent
             : null,
         aiOnboardingPlan: finalOnboardingPlan,
-        aiInternalSteps: aiPlan.internalSteps,
+        aiInternalSteps: internalStepsStr,
         ghlSyncStatus: n8nResult.success ? "SYNCED" : "FAILED",
         ghlErrorMessage: n8nResult.errorMessage,
       },
