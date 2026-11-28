@@ -1,10 +1,81 @@
 
+
+
 import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
 import { prisma } from "@/lib/prisma";
 import { stripe } from "@/lib/stripe";
 import { generateOnboardingPlan } from "@/lib/openai-onboarding";
-import { syncOrderToGoHighLevel } from "@/lib/ghl-sync";
+
+async function triggerN8nOnboarding(payload: {
+  orderId: string;
+  clientName: string;
+  clientEmail: string;
+  clientPhone: string | null;
+  businessName: string | null;
+  businessGoal: string | null;
+  packageName: string;
+  addOnNames: string | null;
+  amount: string;
+  amountInCents: number;
+  notes: string | null;
+  aiOnboardingPlan: string;
+}) {
+  const webhookUrl = process.env.N8N_WEBHOOK_URL;
+
+  if (!webhookUrl) {
+    return {
+      success: false,
+      onboardingPlan: null as string | null,
+      errorMessage: "N8N_WEBHOOK_URL is not configured",
+    };
+  }
+
+  try {
+    const response = await fetch(webhookUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => "");
+      return {
+        success: false,
+        onboardingPlan: null as string | null,
+        errorMessage: `n8n webhook returned ${response.status}: ${errorText || response.statusText}`,
+      };
+    }
+
+    let responseData: Record<string, unknown> | null = null;
+    try {
+      responseData = (await response.json()) as Record<string, unknown>;
+    } catch {
+      responseData = null;
+    }
+
+    const returnedPlan =
+      responseData && typeof responseData.onboardingPlan === "string"
+        ? responseData.onboardingPlan
+        : null;
+
+    return {
+      success: true,
+      onboardingPlan: returnedPlan,
+      errorMessage: null as string | null,
+    };
+  } catch (err) {
+    const message =
+      err instanceof Error ? err.message : "Failed to reach n8n webhook";
+    return {
+      success: false,
+      onboardingPlan: null as string | null,
+      errorMessage: message,
+    };
+  }
+}
 
 export async function POST(req: NextRequest) {
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -20,7 +91,8 @@ export async function POST(req: NextRequest) {
       event = JSON.parse(rawBody) as Stripe.Event;
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Invalid webhook signature";
+    const message =
+      err instanceof Error ? err.message : "Invalid webhook signature";
     await prisma.webhookLog.create({
       data: {
         source: "STRIPE",
@@ -58,7 +130,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Order not found" }, { status: 404 });
     }
 
-    const amountUsd = `$${(existingOrder.amountInCents / 100).toFixed(2)}`;
+    const amountFormatted = (existingOrder.amountInCents / 100).toFixed(2);
+    const amountUsd = `$${amountFormatted}`;
 
     const aiPlan = await generateOnboardingPlan({
       clientName: existingOrder.clientName,
@@ -69,7 +142,7 @@ export async function POST(req: NextRequest) {
       amountFormatted: amountUsd,
     });
 
-    const ghlResult = await syncOrderToGoHighLevel({
+    const n8nResult = await triggerN8nOnboarding({
       orderId: existingOrder.id,
       clientName: existingOrder.clientName,
       clientEmail: existingOrder.clientEmail,
@@ -77,10 +150,14 @@ export async function POST(req: NextRequest) {
       businessName: existingOrder.businessName,
       businessGoal: existingOrder.businessGoal,
       packageName: existingOrder.package.name,
-      ghlTag: existingOrder.package.ghlTag,
-      amountPaidUsd: amountUsd,
+      addOnNames: existingOrder.addOnNames,
+      amount: amountFormatted,
+      amountInCents: existingOrder.amountInCents,
+      notes: existingOrder.businessGoal,
       aiOnboardingPlan: aiPlan.clientPlan,
     });
+
+    const finalOnboardingPlan = n8nResult.onboardingPlan || aiPlan.clientPlan;
 
     await prisma.clientOrder.update({
       where: { id: existingOrder.id },
@@ -88,12 +165,13 @@ export async function POST(req: NextRequest) {
         paymentStatus: "PAID",
         stripeSessionId: session.id,
         stripePaymentId:
-          typeof session.payment_intent === "string" ? session.payment_intent : null,
-        aiOnboardingPlan: aiPlan.clientPlan,
+          typeof session.payment_intent === "string"
+            ? session.payment_intent
+            : null,
+        aiOnboardingPlan: finalOnboardingPlan,
         aiInternalSteps: aiPlan.internalSteps,
-        ghlSyncStatus: ghlResult.success ? "SYNCED" : "FAILED",
-        ghlContactId: ghlResult.contactId,
-        ghlErrorMessage: ghlResult.errorMessage,
+        ghlSyncStatus: n8nResult.success ? "SYNCED" : "FAILED",
+        ghlErrorMessage: n8nResult.errorMessage,
       },
     });
 
@@ -106,7 +184,7 @@ export async function POST(req: NextRequest) {
         payload: JSON.stringify({
           sessionId: session.id,
           aiProvider: aiPlan.providerUsed,
-          ghlSynced: ghlResult.success,
+          n8nSynced: n8nResult.success,
         }),
       },
     });
@@ -114,7 +192,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       received: true,
       orderId: existingOrder.id,
-      ghlSynced: ghlResult.success,
+      n8nSynced: n8nResult.success,
     });
   }
 
@@ -128,7 +206,3 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({ received: true });
 }
-
-
-
-
